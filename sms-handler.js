@@ -1,32 +1,26 @@
-class SmsHandler {
-    constructor(twilioClient) {
-        this.twilioClient = twilioClient;
+const twilio = require('twilio');
+
+class SMSHandler {
+    constructor() {
+        this.client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
     }
-    async fetchMessages() {
+
+    async fetchIncomingSMS() {
         try {
-            const messages = await this.twilioClient.messages.list();
+            const messages = await this.client.messages.list({
+                to: process.env.TWILIO_PHONE_NUMBER,
+                limit: 20
+            });
             return messages;
         } catch (error) {
-            console.error('Error fetching messages:', error);
+            console.error('Error fetching SMS messages:', error);
             throw error;
         }
     }
+
     validateMessage(message) {
-        // Example validation: check if the message has a body
-        return message.body && message.body.trim().length > 0;
-    }
-    filterInboundMessages(messages) {
-        return messages.filter(message => message.direction === 'inbound');
-    }
-    async handleMessages() {
-        const messages = await this.fetchMessages();
-        const validMessages = messages.filter(msg => this.validateMessage(msg));
-        const inboundMessages = this.filterInboundMessages(validMessages);
-        return inboundMessages;
+        return message && message.sid && message.body && message.from;
     }
 }
 
-// Example usage:
-// const twilioClient = require('twilio')(accountSid, authToken);
-// const smsHandler = new SmsHandler(twilioClient);
-// smsHandler.handleMessages().then(inboundMessages => console.log(inboundMessages));
+module.exports = SMSHandler;
