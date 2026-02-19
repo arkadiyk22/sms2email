@@ -1,78 +1,56 @@
 require('dotenv').config();
-const twilio = require('twilio');
-const nodemailer = require('nodemailer');
-const fs = require('fs');
-const path = require('path');
+const SMSHandler = require('./sms-handler');
+const EmailSender = require('./email-sender');
+const { isMessageProcessed, saveProcessedMessage } = require('./utils');
 
-// Initialize Twilio client
-const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const smsHandler = new SMSHandler();
+const emailSender = new EmailSender();
 
-// Initialize email transporter
-const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: process.env.EMAIL_PORT,
-    secure: process.env.EMAIL_PORT === '465',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD
-    }
-});
-
-// Path to store processed message IDs
-const processedFile = path.join(__dirname, 'processed_messages.json');
-
-function getProcessedMessages() {
-    try {
-        if (fs.existsSync(processedFile)) {
-            const data = fs.readFileSync(processedFile, 'utf8');
-            return JSON.parse(data);
-        }
-    } catch (error) {
-        console.error('Error reading processed messages:', error);
-    }
-    return [];
-}
-
-function saveProcessedMessage(messageId) {
-    try {
-        const processed = getProcessedMessages();
-        if (!processed.includes(messageId)) {
-            processed.push(messageId);
-            fs.writeFileSync(processedFile, JSON.stringify(processed, null, 2));
-        }
-    } catch (error) {
-        console.error('Error saving processed message:', error);
-    }
-}
-
-async function checkAndForwardSMS() {
+async function checkSMS() {
     try {
         console.log('Starting SMS check...');
-        const messages = await twilioClient.messages.list({ limit: 20 });
-        const processedMessages = getProcessedMessages();
+        const emailConnected = await emailSender.testConnection();
+        if (!emailConnected) {
+            console.warn('Warning: Email connection failed');
+        }
+
+        const messages = await smsHandler.fetchIncomingSMS();
+        console.log(`Found ${messages.length} inbound messages`);
+
+        let processedCount = 0;
+
         for (const message of messages) {
-            if (message.direction === 'inbound' && !processedMessages.includes(message.sid)) {
-                console.log(`New SMS from ${message.from}: ${message.body}`);
-                const mailOptions = {
-                    from: process.env.EMAIL_FROM,
-                    to: process.env.EMAIL_TO,
-                    subject: `SMS from ${message.from}`,
-                    html: `<h2>New SMS Message</h2><p><strong>From:</strong> ${message.from}</p><p><strong>To:</strong> ${message.to}</p><p><strong>Received:</strong> ${message.dateCreated}</p><hr><p><strong>Message:</strong></p><p>${message.body}</p>`
-                };
-                try {
-                    const info = await emailTransporter.sendMail(mailOptions);
-                    console.log(`Email sent with ID: ${info.messageId}`);
-                    saveProcessedMessage(message.sid);
-                } catch (emailError) {
-                    console.error(`Failed to send email for SMS ${message.sid}:`, emailError);
-                }
+            if (isMessageProcessed(message.sid)) {
+                console.log(`Message ${message.sid} already processed, skipping`);
+                continue;
+            }
+
+            if (!smsHandler.validateMessage(message)) {
+                console.warn(`Invalid message ${message.sid}, skipping`);
+                continue;
+            }
+
+            try {
+                const timestamp = new Date(message.dateCreated).toLocaleString();
+                await emailSender.sendSMSNotification(
+                    message.from,
+                    message.body,
+                    timestamp
+                );
+
+                saveProcessedMessage(message.sid);
+                processedCount++;
+                console.log(`Successfully processed message from ${message.from}`);
+            } catch (error) {
+                console.error(`Error processing message ${message.sid}: ${error.message}`);
             }
         }
-        console.log('SMS check completed');
+
+        console.log(`SMS check completed. Processed ${processedCount} new messages`);
     } catch (error) {
-        console.error('Error checking SMS:', error);
+        console.error(`Error in SMS check: ${error.message}`);
         process.exit(1);
     }
 }
 
-checkAndForwardSMS();
+checkSMS();
