@@ -1,0 +1,14 @@
+# Node.js
+node_modules/
+
+# Environment Variables
+.env
+
+# macOS
+.DS_Store
+
+# Logs
+logs/
+
+# Processed Messages
+processed_messages.json
